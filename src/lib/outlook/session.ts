@@ -1,5 +1,5 @@
 import { cookies } from "next/headers";
-import { createHmac, timingSafeEqual } from "crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "crypto";
 
 export const OUTLOOK_COOKIE = "eventmail_outlook";
 
@@ -24,42 +24,40 @@ function sign(payload: string): string {
   return createHmac("sha256", getSecret()).update(payload).digest("base64url");
 }
 
-export function encodeSession(session: OutlookSession): string {
-  const payload = Buffer.from(JSON.stringify(session), "utf8").toString(
-    "base64url",
-  );
-  return `${payload}.${sign(payload)}`;
-}
+// Tokens are too large for a cookie (browsers drop cookies > ~4KB), so they live in
+// server memory. The cookie only carries a signed session id. Dev/test setup: sessions
+// are lost when the server restarts (just click Connect Outlook again).
+const globalStore = globalThis as unknown as {
+  __outlookSessions?: Map<string, OutlookSession>;
+};
+const store = (globalStore.__outlookSessions ??= new Map<string, OutlookSession>());
 
-export function decodeSession(raw: string | undefined): OutlookSession | null {
+function readSessionId(raw: string | undefined): string | null {
   if (!raw) return null;
-  const [payload, signature] = raw.split(".");
-  if (!payload || !signature) return null;
-  const expected = sign(payload);
+  const [id, signature] = raw.split(".");
+  if (!id || !signature) return null;
   try {
     const a = Buffer.from(signature);
-    const b = Buffer.from(expected);
+    const b = Buffer.from(sign(id));
     if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
   } catch {
     return null;
   }
-  try {
-    return JSON.parse(
-      Buffer.from(payload, "base64url").toString("utf8"),
-    ) as OutlookSession;
-  } catch {
-    return null;
-  }
+  return id;
 }
 
 export async function readOutlookSession(): Promise<OutlookSession | null> {
   const jar = await cookies();
-  return decodeSession(jar.get(OUTLOOK_COOKIE)?.value);
+  const id = readSessionId(jar.get(OUTLOOK_COOKIE)?.value);
+  return id ? (store.get(id) ?? null) : null;
 }
 
 export async function writeOutlookSession(session: OutlookSession) {
   const jar = await cookies();
-  jar.set(OUTLOOK_COOKIE, encodeSession(session), {
+  const id =
+    readSessionId(jar.get(OUTLOOK_COOKIE)?.value) ?? randomUUID();
+  store.set(id, session);
+  jar.set(OUTLOOK_COOKIE, `${id}.${sign(id)}`, {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
@@ -70,5 +68,7 @@ export async function writeOutlookSession(session: OutlookSession) {
 
 export async function clearOutlookSession() {
   const jar = await cookies();
+  const id = readSessionId(jar.get(OUTLOOK_COOKIE)?.value);
+  if (id) store.delete(id);
   jar.delete(OUTLOOK_COOKIE);
 }
