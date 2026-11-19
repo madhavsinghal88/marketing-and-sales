@@ -28,7 +28,13 @@ export function TopHeader({
 
   return (
     <header className="topbar">
-      <h1 className="topbar__title">Event Email Automation</h1>
+      <div className="topbar__titles">
+        <h1 className="topbar__title">Marketing & Sales Hub</h1>
+        <p className="topbar__subtitle">
+          Automate event communication, engage participants, and drive marketing
+          & sales outcomes.
+        </p>
+      </div>
 
       <div className="topbar__right">
         {outlookConnected ? (

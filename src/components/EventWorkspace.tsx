@@ -1,14 +1,19 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type {
   EmailTemplate,
+  EngagementLevel,
   EventItem,
   Participant,
   SequenceDay,
-  TouchLog,
 } from "@/lib/types";
 import { SEQUENCE_DAYS } from "@/lib/types";
 import { formatTouchTime, nextSendableDay } from "@/lib/outlook/sequence";
+import { upsertTouch } from "@/lib/drip/schedule";
+import { cancelPendingJobsForParticipants } from "@/lib/drip/store";
+import { uniqueSorted } from "@/lib/analytics";
 import { ParticipantsTable } from "./ParticipantsTable";
+import { ScheduleCampaignModal } from "./ScheduleCampaignModal";
+import { AutomationTimeline } from "./AutomationTimeline";
 
 type Tab = "participants" | "timeline" | "settings";
 
@@ -16,6 +21,7 @@ type Props = {
   event: EventItem;
   template: EmailTemplate;
   outlookConnected: boolean;
+  scheduleRequestId?: number;
   onParticipantsChange: (participants: Participant[]) => void;
   onToast: (message: string) => void;
   onEditTemplate: () => void;
@@ -30,22 +36,11 @@ type SendResultRow = {
   day: SequenceDay;
 };
 
-function upsertTouch(
-  touches: TouchLog[],
-  day: SequenceDay,
-  patch: Partial<TouchLog>,
-): TouchLog[] {
-  const exists = touches.some((t) => t.day === day);
-  if (!exists) {
-    return [...touches, { day, status: "Pending", ...patch } as TouchLog];
-  }
-  return touches.map((t) => (t.day === day ? { ...t, ...patch } : t));
-}
-
 export function EventWorkspace({
   event,
   template,
   outlookConnected,
+  scheduleRequestId = 0,
   onParticipantsChange,
   onToast,
   onEditTemplate,
@@ -57,17 +52,49 @@ export function EventWorkspace({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [sendDay, setSendDay] = useState<SequenceDay | "auto">("auto");
   const [sending, setSending] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [industryFilter, setIndustryFilter] = useState("");
+  const [engagementFilter, setEngagementFilter] = useState<
+    EngagementLevel | ""
+  >("");
 
   const pageSize = 5;
 
+  useEffect(() => {
+    if (scheduleRequestId > 0) setScheduleOpen(true);
+  }, [scheduleRequestId]);
+
+  const industries = useMemo(
+    () => uniqueSorted(event.participants.map((p) => p.industry)),
+    [event.participants],
+  );
+
+  const visibleParticipants = useMemo(() => {
+    return event.participants.filter((p) => {
+      if (industryFilter && p.industry !== industryFilter) return false;
+      if (engagementFilter && p.engagement.level !== engagementFilter) {
+        return false;
+      }
+      return true;
+    });
+  }, [event.participants, industryFilter, engagementFilter]);
+
   const filteredCount = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return event.participants.length;
-    return event.participants.filter(
+    if (!q) return visibleParticipants.length;
+    return visibleParticipants.filter(
       (p) =>
         p.name.toLowerCase().includes(q) || p.email.toLowerCase().includes(q),
     ).length;
-  }, [event.participants, query]);
+  }, [visibleParticipants, query]);
+
+  const scheduledTouches = useMemo(() => {
+    return event.participants.reduce((count, p) => {
+      return (
+        count + p.touches.filter((t) => t.status === "Scheduled").length
+      );
+    }, 0);
+  }, [event.participants]);
 
   function updateParticipant(id: string, patch: Partial<Participant>) {
     onParticipantsChange(
@@ -86,7 +113,7 @@ export function EventWorkspace({
 
   function toggleAllOnPage() {
     const q = query.trim().toLowerCase();
-    const filtered = event.participants.filter(
+    const filtered = visibleParticipants.filter(
       (p) =>
         !q ||
         p.name.toLowerCase().includes(q) ||
@@ -130,7 +157,6 @@ export function EventWorkspace({
       return;
     }
 
-    // Group by day so we can call API once per day bucket
     const byDay = new Map<SequenceDay, Participant[]>();
     for (const job of jobs) {
       const list = byDay.get(job.day) ?? [];
@@ -174,6 +200,13 @@ export function EventWorkspace({
         for (const row of data.results ?? []) {
           allResults.push({ ...row, day });
         }
+
+        // Manual send replaces any pending drip for these people/day
+        cancelPendingJobsForParticipants(
+          event.id,
+          people.map((p) => p.id),
+          day,
+        );
       }
 
       const nowLabel = formatTouchTime();
@@ -183,18 +216,24 @@ export function EventWorkspace({
           if (rows.length === 0) return p;
           let touches = p.touches;
           for (const row of rows) {
-            touches = upsertTouch(touches, row.day, row.ok
-              ? {
-                  status: "Sent",
-                  at: nowLabel,
-                  messageId: row.messageId,
-                  error: undefined,
-                }
-              : {
-                  status: "Failed",
-                  at: nowLabel,
-                  error: row.error ?? "Send failed",
-                });
+            touches = upsertTouch(
+              touches,
+              row.day,
+              row.ok
+                ? {
+                    status: "Sent",
+                    at: nowLabel,
+                    messageId: row.messageId,
+                    error: undefined,
+                    dueAt: undefined,
+                    jobId: undefined,
+                  }
+                : {
+                    status: "Failed",
+                    at: nowLabel,
+                    error: row.error ?? "Send failed",
+                  },
+            );
           }
           return { ...p, touches };
         }),
@@ -235,6 +274,9 @@ export function EventWorkspace({
           <p className="workspace__meta">
             {event.participantCount} participants · Campaign: {event.campaign} ·
             Template: {event.sequenceLabel}
+            {scheduledTouches > 0
+              ? ` · ${scheduledTouches} scheduled`
+              : ""}
           </p>
         </div>
         <div className="workspace__actions">
@@ -255,9 +297,7 @@ export function EventWorkspace({
           <button
             type="button"
             className="btn btn--ghost"
-            onClick={() =>
-              onToast("Full drip scheduler lands in Phase 4. Use Send now for now.")
-            }
+            onClick={() => setScheduleOpen(true)}
           >
             Schedule Campaign
           </button>
@@ -301,7 +341,9 @@ export function EventWorkspace({
             disabled={sending || selectedIds.size === 0}
             onClick={handleSendNow}
           >
-            {sending ? "Sending…" : `Send now${selectedIds.size ? ` (${selectedIds.size})` : ""}`}
+            {sending
+              ? "Sending…"
+              : `Send now${selectedIds.size ? ` (${selectedIds.size})` : ""}`}
           </button>
         </div>
       </div>
@@ -328,38 +370,85 @@ export function EventWorkspace({
       </div>
 
       {tab === "participants" && (
-        <ParticipantsTable
-          participants={event.participants}
-          selectedIds={selectedIds}
-          query={query}
-          page={page}
-          pageSize={pageSize}
-          onQueryChange={(q) => {
-            setQuery(q);
-            setPage(1);
-          }}
-          onToggle={toggle}
-          onToggleAll={toggleAllOnPage}
-          onCommentChange={(id, comment) => updateParticipant(id, { comment })}
-          onTemplateChange={(id, templateName) =>
-            updateParticipant(id, { template: templateName })
-          }
-          onPageChange={setPage}
-          onAddParticipant={() =>
-            onToast("Add Participant — coming in Phase 5.")
-          }
-        />
+        <>
+          <div className="segment-chipbar">
+            <label>
+              Industry
+              <select
+                value={industryFilter}
+                onChange={(e) => {
+                  setIndustryFilter(e.target.value);
+                  setPage(1);
+                }}
+              >
+                <option value="">All</option>
+                {industries.map((industry) => (
+                  <option key={industry} value={industry}>
+                    {industry}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Engagement
+              <select
+                value={engagementFilter}
+                onChange={(e) => {
+                  setEngagementFilter(
+                    e.target.value as EngagementLevel | "",
+                  );
+                  setPage(1);
+                }}
+              >
+                <option value="">All</option>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+                <option value="none">None</option>
+              </select>
+            </label>
+            <span className="segment-chipbar__count">
+              {visibleParticipants.length}/{event.participants.length} people
+            </span>
+          </div>
+          <ParticipantsTable
+            participants={visibleParticipants}
+            selectedIds={selectedIds}
+            query={query}
+            page={page}
+            pageSize={pageSize}
+            onQueryChange={(q) => {
+              setQuery(q);
+              setPage(1);
+            }}
+            onToggle={toggle}
+            onToggleAll={toggleAllOnPage}
+            onCommentChange={(id, comment) =>
+              updateParticipant(id, { comment })
+            }
+            onTemplateChange={(id, templateName) =>
+              updateParticipant(id, { template: templateName })
+            }
+            onPageChange={setPage}
+            onAddParticipant={() =>
+              onToast("Add Participant — coming in a later phase.")
+            }
+          />
+        </>
       )}
 
       {tab === "timeline" && (
-        <div className="tab-panel">
-          <p>
-            Email timeline for <strong>{event.name}</strong> — sequence D1 → D3
-            → D5 → D7. Detailed scheduler lands in Phase 4.
-          </p>
+        <div className="tab-panel tab-panel--timeline">
+          <AutomationTimeline
+            participants={event.participants}
+            onSchedule={() => setScheduleOpen(true)}
+          />
           <p className="tab-panel__muted">
-            Showing {filteredCount} searchable participants in this event. Use
-            Send now to push the next pending touch via Outlook.
+            {scheduledTouches > 0
+              ? `${scheduledTouches} touch${scheduledTouches === 1 ? "" : "es"} currently scheduled. `
+              : "No scheduled touches yet. "}
+            Showing {filteredCount} searchable participants. Due jobs auto-send
+            while Outlook is connected.
           </p>
         </div>
       )}
@@ -372,10 +461,27 @@ export function EventWorkspace({
           </p>
           <p className="tab-panel__muted">
             Live Outlook sends use the global template from Manage Templates.
-            Drip timing arrives in Phase 4.
+            Drip jobs are stored locally and fire when due. Use Audience &
+            Segments for cross-event filters.
           </p>
         </div>
       )}
+
+      <ScheduleCampaignModal
+        open={scheduleOpen}
+        eventId={event.id}
+        eventName={event.name}
+        participants={event.participants}
+        selectedIds={selectedIds}
+        onClose={() => setScheduleOpen(false)}
+        onScheduled={(participants, scheduledCount) => {
+          onParticipantsChange(participants);
+          onToast(
+            `Scheduled ${scheduledCount} email${scheduledCount === 1 ? "" : "s"}. They send when due if Outlook stays connected.`,
+          );
+        }}
+        onToast={onToast}
+      />
     </section>
   );
 }

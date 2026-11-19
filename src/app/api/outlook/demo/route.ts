@@ -6,7 +6,7 @@ export async function POST() {
   await writeOutlookSession({
     mode: "demo",
     mailbox: "marketing@eventmail.app",
-    displayName: "EventMail Demo",
+    displayName: "Marketing Demo",
   });
 
   return NextResponse.json({

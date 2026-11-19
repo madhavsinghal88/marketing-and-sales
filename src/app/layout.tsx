@@ -9,7 +9,7 @@ const body = Source_Sans_3({
 });
 
 export const metadata: Metadata = {
-  title: "EventMail — Event Email Automation",
+  title: "Marketing & Sales Hub",
   description:
     "Event-based email outreach with Outlook, drip sequences, and participant tracking.",
 };

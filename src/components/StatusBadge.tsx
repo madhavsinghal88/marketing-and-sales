@@ -1,7 +1,7 @@
-import type { EventStatus, TouchStatus } from "@/lib/types";
+import type { CampaignStatus, EventStatus, TouchStatus } from "@/lib/types";
 
 type Props = {
-  status: TouchStatus | EventStatus;
+  status: TouchStatus | EventStatus | CampaignStatus;
   time?: string;
   compact?: boolean;
 };

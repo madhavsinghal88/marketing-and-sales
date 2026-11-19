@@ -16,22 +16,44 @@ const CARDS: {
     label: "Emails Sent",
     format: (n) => n.toLocaleString("en-US"),
   },
-  { key: "pendingEmails", label: "Pending Emails" },
+  {
+    key: "opens",
+    label: "Opens",
+    format: (n) => n.toLocaleString("en-US"),
+  },
+  {
+    key: "clicks",
+    label: "Clicks",
+    format: (n) => n.toLocaleString("en-US"),
+  },
+  { key: "salesLeads", label: "Sales Leads" },
 ];
 
 export function StatsBar({ stats }: Props) {
   return (
     <section className="stats-bar" aria-label="Overview stats">
-      {CARDS.map((card) => (
-        <article key={card.key} className="stat-card">
-          <p className="stat-card__value">
-            {card.format
-              ? card.format(stats[card.key])
-              : stats[card.key].toLocaleString("en-US")}
-          </p>
-          <p className="stat-card__label">{card.label}</p>
-        </article>
-      ))}
+      {CARDS.map((card) => {
+        const value = stats[card.key];
+        const suffix =
+          card.key === "opens"
+            ? ` (${stats.openRate}%)`
+            : card.key === "clicks"
+              ? ` (${stats.clickRate}%)`
+              : "";
+        return (
+          <article key={card.key} className="stat-card">
+            <p className="stat-card__value">
+              {card.format
+                ? card.format(value)
+                : value.toLocaleString("en-US")}
+              {suffix ? (
+                <span className="stat-card__suffix">{suffix}</span>
+              ) : null}
+            </p>
+            <p className="stat-card__label">{card.label}</p>
+          </article>
+        );
+      })}
     </section>
   );
 }
