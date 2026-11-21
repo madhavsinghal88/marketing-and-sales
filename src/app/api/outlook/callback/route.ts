@@ -1,6 +1,10 @@
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
-import { getOutlookConfig, OUTLOOK_SCOPES } from "@/lib/outlook/config";
+import {
+  getOutlookConfig,
+  OUTLOOK_SCOPES,
+  OUTLOOK_TRACKING_SCOPES,
+} from "@/lib/outlook/config";
 import { writeOutlookSession } from "@/lib/outlook/session";
 
 export async function GET(req: NextRequest) {
@@ -19,6 +23,8 @@ export async function GET(req: NextRequest) {
   const jar = await cookies();
   const expected = jar.get("eventmail_oauth_state")?.value;
   jar.delete("eventmail_oauth_state");
+  const tracking = jar.get("eventmail_oauth_tracking")?.value === "1";
+  jar.delete("eventmail_oauth_tracking");
 
   if (!code || !state || !expected || state !== expected) {
     return NextResponse.redirect(`${origin}/?outlook=error&reason=invalid_state`);
@@ -30,7 +36,7 @@ export async function GET(req: NextRequest) {
     grant_type: "authorization_code",
     code,
     redirect_uri: config.redirectUri,
-    scope: OUTLOOK_SCOPES,
+    scope: tracking ? OUTLOOK_TRACKING_SCOPES : OUTLOOK_SCOPES,
   });
 
   const tokenRes = await fetch(config.tokenUrl, {
@@ -47,7 +53,11 @@ export async function GET(req: NextRequest) {
     access_token: string;
     refresh_token?: string;
     expires_in: number;
+    scope?: string;
   };
+  const canRead = Boolean(
+    tracking && token.scope?.toLowerCase().split(" ").includes("mail.read"),
+  );
 
   const meRes = await fetch("https://graph.microsoft.com/v1.0/me", {
     headers: { Authorization: `Bearer ${token.access_token}` },
@@ -72,7 +82,12 @@ export async function GET(req: NextRequest) {
     accessToken: token.access_token,
     refreshToken: token.refresh_token,
     expiresAt: Date.now() + token.expires_in * 1000,
+    canRead,
   });
 
-  return NextResponse.redirect(`${origin}/?outlook=connected`);
+  return NextResponse.redirect(
+    `${origin}/?outlook=connected${
+      tracking ? (canRead ? "&tracking=1" : "&tracking=denied") : ""
+    }`,
+  );
 }

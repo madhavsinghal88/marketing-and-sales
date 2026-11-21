@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
+  DeliveryStatus,
   EmailTemplate,
   EngagementLevel,
   EventItem,
@@ -8,6 +9,9 @@ import type {
 } from "@/lib/types";
 import { SEQUENCE_DAYS } from "@/lib/types";
 import { formatTouchTime, nextSendableDay } from "@/lib/outlook/sequence";
+import { initialDelivery } from "@/lib/outlook/delivery";
+import { AddParticipantPanel } from "./AddParticipantPanel";
+import type { SalesforceSyncApi } from "@/lib/salesforce/useSync";
 import { upsertTouch } from "@/lib/drip/schedule";
 import { cancelPendingJobsForParticipants } from "@/lib/drip/store";
 import { uniqueSorted } from "@/lib/analytics";
@@ -21,6 +25,10 @@ type Props = {
   event: EventItem;
   template: EmailTemplate;
   outlookConnected: boolean;
+  outlookMode: "demo" | "live" | null;
+  outlookMailbox: string | null;
+  outlookCanRead: boolean;
+  sf: SalesforceSyncApi;
   scheduleRequestId?: number;
   onParticipantsChange: (participants: Participant[]) => void;
   onToast: (message: string) => void;
@@ -34,12 +42,26 @@ type SendResultRow = {
   messageId?: string;
   error?: string;
   day: SequenceDay;
+  subject?: string;
+  sentAt?: string;
+  demo?: boolean;
+};
+
+type DeliveryApiResult = {
+  id: string;
+  status: DeliveryStatus;
+  detail: string;
+  checkedAt: string;
 };
 
 export function EventWorkspace({
   event,
   template,
   outlookConnected,
+  outlookMode,
+  outlookMailbox,
+  outlookCanRead,
+  sf,
   scheduleRequestId = 0,
   onParticipantsChange,
   onToast,
@@ -52,6 +74,8 @@ export function EventWorkspace({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [sendDay, setSendDay] = useState<SequenceDay | "auto">("auto");
   const [sending, setSending] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [industryFilter, setIndustryFilter] = useState("");
   const [engagementFilter, setEngagementFilter] = useState<
@@ -144,17 +168,62 @@ export function EventWorkspace({
     }
 
     const selected = event.participants.filter((p) => selectedIds.has(p.id));
-    const jobs = selected
+    setSending(true);
+    try {
+      const outcome = await runSend(selected, event.participants, sendDay);
+      if (outcome.nothingToSend) {
+        onToast("Nothing to send — selected people are already complete.");
+        return;
+      }
+      if (outcome.networkError) {
+        onToast("Network error while sending.");
+        return;
+      }
+      for (const message of outcome.errors) onToast(message);
+      onToast(
+        outcome.failed
+          ? `Sent ${outcome.sent}, failed ${outcome.failed}. Failed rows can be retried.`
+          : `Sent ${outcome.sent} email${outcome.sent === 1 ? "" : "s"} via Outlook${
+              outlookMode === "demo" ? " (demo — not actually sent)" : ""
+            }.`,
+      );
+    } finally {
+      setSending(false);
+    }
+  }
+
+  /**
+   * Sends the sequence email for `people` and writes the results onto `base`
+   * (the full participant list, which may already include a just-added person).
+   */
+  async function runSend(
+    people: Participant[],
+    base: Participant[],
+    dayChoice: SequenceDay | "auto",
+  ): Promise<{
+    sent: number;
+    failed: number;
+    errors: string[]; // request-level failures (e.g. not connected)
+    rowErrors: string[]; // per-recipient failures reported by Outlook
+    nothingToSend: boolean;
+    networkError: boolean;
+  }> {
+    const jobs = people
       .map((p) => {
         const day =
-          sendDay === "auto" ? nextSendableDay(p) : (sendDay as SequenceDay);
+          dayChoice === "auto" ? nextSendableDay(p) : (dayChoice as SequenceDay);
         return day ? { participant: p, day } : null;
       })
       .filter(Boolean) as { participant: Participant; day: SequenceDay }[];
 
+    const empty = {
+      sent: 0,
+      failed: 0,
+      errors: [] as string[],
+      rowErrors: [] as string[],
+    };
     if (jobs.length === 0) {
-      onToast("Nothing to send — selected people are already complete.");
-      return;
+      return { ...empty, nothingToSend: true, networkError: false };
     }
 
     const byDay = new Map<SequenceDay, Participant[]>();
@@ -164,11 +233,11 @@ export function EventWorkspace({
       byDay.set(job.day, list);
     }
 
-    setSending(true);
     const allResults: SendResultRow[] = [];
+    const errors: string[] = [];
 
     try {
-      for (const [day, people] of byDay) {
+      for (const [day, group] of byDay) {
         const res = await fetch("/api/outlook/send", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -176,7 +245,7 @@ export function EventWorkspace({
             eventName: event.name,
             day,
             template,
-            recipients: people.map((p) => ({
+            recipients: group.map((p) => ({
               id: p.id,
               name: p.name,
               email: p.email,
@@ -187,13 +256,10 @@ export function EventWorkspace({
         const data = (await res.json()) as {
           error?: string;
           results?: SendResultRow[];
-          sentCount?: number;
-          failedCount?: number;
-          mode?: string;
         };
 
         if (!res.ok) {
-          onToast(data.error ?? "Send failed");
+          errors.push(data.error ?? "Send failed");
           continue;
         }
 
@@ -204,54 +270,290 @@ export function EventWorkspace({
         // Manual send replaces any pending drip for these people/day
         cancelPendingJobsForParticipants(
           event.id,
-          people.map((p) => p.id),
+          group.map((p) => p.id),
           day,
         );
       }
-
-      const nowLabel = formatTouchTime();
-      onParticipantsChange(
-        event.participants.map((p) => {
-          const rows = allResults.filter((r) => r.id === p.id);
-          if (rows.length === 0) return p;
-          let touches = p.touches;
-          for (const row of rows) {
-            touches = upsertTouch(
-              touches,
-              row.day,
-              row.ok
-                ? {
-                    status: "Sent",
-                    at: nowLabel,
-                    messageId: row.messageId,
-                    error: undefined,
-                    dueAt: undefined,
-                    jobId: undefined,
-                  }
-                : {
-                    status: "Failed",
-                    at: nowLabel,
-                    error: row.error ?? "Send failed",
-                  },
-            );
-          }
-          return { ...p, touches };
-        }),
-      );
-
-      const sent = allResults.filter((r) => r.ok).length;
-      const failed = allResults.length - sent;
-      onToast(
-        failed
-          ? `Sent ${sent}, failed ${failed}. Failed rows can be retried.`
-          : `Sent ${sent} email${sent === 1 ? "" : "s"} via Outlook.`,
-      );
     } catch {
-      onToast("Network error while sending.");
+      return { ...empty, errors, nothingToSend: false, networkError: true };
+    }
+
+    const nowLabel = formatTouchTime();
+    onParticipantsChange(
+      base.map((p) => {
+        const rows = allResults.filter((r) => r.id === p.id);
+        if (rows.length === 0) return p;
+        let touches = p.touches;
+        let delivery = p.delivery;
+        for (const row of rows) {
+          touches = upsertTouch(
+            touches,
+            row.day,
+            row.ok
+              ? {
+                  status: "Sent",
+                  at: nowLabel,
+                  messageId: row.messageId,
+                  error: undefined,
+                  dueAt: undefined,
+                  jobId: undefined,
+                }
+              : {
+                  status: "Failed",
+                  at: nowLabel,
+                  error: row.error ?? "Send failed",
+                },
+          );
+          if (row.ok) delivery = initialDelivery(row, row.day) ?? delivery;
+        }
+        return { ...p, touches, delivery };
+      }),
+    );
+
+    const sent = allResults.filter((r) => r.ok).length;
+    return {
+      sent,
+      failed: allResults.length - sent,
+      errors,
+      rowErrors: allResults.flatMap((r) => (r.ok || !r.error ? [] : [r.error])),
+      nothingToSend: false,
+      networkError: false,
+    };
+  }
+
+  async function handleAddParticipant(
+    participant: Participant,
+    opts: { sendNow: boolean },
+  ): Promise<boolean> {
+    const base = [participant, ...event.participants];
+
+    if (opts.sendNow && !outlookConnected) {
+      onToast("Connect Outlook first, then send.");
+      return false;
+    }
+
+    // Add first, so the person is never lost if the send fails.
+    onParticipantsChange(base);
+    setTab("participants");
+    setQuery("");
+    setIndustryFilter("");
+    setEngagementFilter("");
+    setPage(1);
+    setSelectedIds((prev) => new Set(prev).add(participant.id));
+
+    if (!opts.sendNow) {
+      onToast(`${participant.name} added to ${event.name}.`);
+      return true;
+    }
+
+    setSending(true);
+    try {
+      const outcome = await runSend([participant], base, "D1");
+      if (outcome.networkError) {
+        onToast(
+          `${participant.name} was added, but the send hit a network error. Use Retry failed.`,
+        );
+      } else if (outcome.failed > 0 || outcome.sent === 0) {
+        onToast(
+          `${participant.name} was added, but the email failed${
+            outcome.errors[0] || outcome.rowErrors[0]
+              ? `: ${outcome.errors[0] ?? outcome.rowErrors[0]}`
+              : ""
+          }. Use Retry failed.`,
+        );
+      } else {
+        onToast(
+          outlookMode === "demo"
+            ? `${participant.name} added. Demo mode: the email was simulated, not sent.`
+            : `${participant.name} added and Day 1 email sent to ${participant.email}.`,
+        );
+      }
+      return true;
     } finally {
       setSending(false);
     }
   }
+
+  /* ——— Delivery verification ——— */
+
+  const participantsRef = useRef(event.participants);
+  const checkDeliveryRef = useRef<(silent: boolean) => Promise<void>>(
+    async () => {},
+  );
+
+  useEffect(() => {
+    participantsRef.current = event.participants;
+  });
+
+  async function checkDelivery(silent: boolean) {
+    if (checking) return;
+
+    if (outlookMode === "live" && !outlookCanRead) {
+      if (!silent) {
+        onToast(
+          "Automatic delivery checks aren't enabled. Use Confirm received once you see the email in the inbox.",
+        );
+      }
+      return;
+    }
+
+    const restrict = !silent && selectedIds.size > 0;
+    const targets = participantsRef.current.filter((p) => {
+      const d = p.delivery;
+      if (!d || d.demo) return false;
+      if (d.status === "bounced" || d.status === "confirmed") return false;
+      return restrict ? selectedIds.has(p.id) : true;
+    });
+
+    if (targets.length === 0) {
+      if (!silent) {
+        const demoOnly = participantsRef.current.some((p) => p.delivery?.demo);
+        onToast(
+          demoOnly
+            ? "Demo sends can't be verified. Connect real Outlook and send a real email."
+            : "No sent emails to check yet. Send an email first.",
+        );
+      }
+      return;
+    }
+
+    setChecking(true);
+    try {
+      const res = await fetch("/api/outlook/delivery", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          checks: targets.map((p) => ({
+            id: p.id,
+            email: p.email,
+            subject: p.delivery!.subject,
+            sentAt: p.delivery!.sentAt,
+          })),
+        }),
+      });
+      const data = (await res.json()) as {
+        error?: string;
+        results?: DeliveryApiResult[];
+      };
+
+      if (!res.ok) {
+        if (!silent) onToast(data.error ?? "Could not check delivery.");
+        return;
+      }
+
+      const byId = new Map((data.results ?? []).map((r) => [r.id, r]));
+      const newlyBounced: string[] = [];
+      onParticipantsChange(
+        participantsRef.current.map((p) => {
+          const row = byId.get(p.id);
+          if (!row || !p.delivery || p.delivery.status === "confirmed") return p;
+          if (row.status === "bounced" && p.delivery.status !== "bounced") {
+            newlyBounced.push(p.name);
+          }
+          return {
+            ...p,
+            delivery: {
+              ...p.delivery,
+              status: row.status,
+              detail: row.detail,
+              checkedAt: row.checkedAt,
+            },
+          };
+        }),
+      );
+
+      const results = data.results ?? [];
+      if (newlyBounced.length > 0) {
+        onToast(`Bounce detected for ${newlyBounced.join(", ")}.`);
+      } else if (!silent) {
+        const delivered = results.filter((r) => r.status === "delivered").length;
+        const waiting = results.filter((r) => r.status === "awaiting").length;
+        const unverified = results.filter((r) => r.status === "unverified").length;
+        onToast(
+          `Checked ${results.length}: ${delivered} delivered, ${waiting} still checking${
+            unverified ? `, ${unverified} unverified` : ""
+          }.`,
+        );
+      }
+    } catch {
+      if (!silent) onToast("Network error while checking delivery.");
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  useEffect(() => {
+    checkDeliveryRef.current = checkDelivery;
+  });
+
+  const awaitingCount = event.participants.filter(
+    (p) => p.delivery?.status === "awaiting" && !p.delivery.demo,
+  ).length;
+
+  // While something is still "awaiting", re-check quietly every 30s.
+  useEffect(() => {
+    if (outlookMode !== "live" || !outlookCanRead || awaitingCount === 0) return;
+    const id = window.setInterval(
+      () => void checkDeliveryRef.current(true),
+      30_000,
+    );
+    return () => window.clearInterval(id);
+  }, [outlookMode, outlookCanRead, awaitingCount]);
+
+  function handleRemoveParticipant(id: string) {
+    const person = event.participants.find((p) => p.id === id);
+    if (!person || person.source !== "manual") return;
+    if (!window.confirm(`Remove ${person.name} (${person.email}) from this event?`)) {
+      return;
+    }
+    cancelPendingJobsForParticipants(event.id, [id]);
+    onParticipantsChange(event.participants.filter((p) => p.id !== id));
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    onToast(`${person.name} removed.`);
+  }
+
+  function handleConfirmReceived(id: string) {
+    onParticipantsChange(
+      event.participants.map((p) =>
+        p.id === id && p.delivery
+          ? {
+              ...p,
+              delivery: {
+                ...p.delivery,
+                status: "confirmed" as const,
+                detail: "Confirmed received by a team member.",
+                checkedAt: new Date().toISOString(),
+              },
+            }
+          : p,
+      ),
+    );
+    onToast("Marked as received.");
+  }
+
+  const deliverySummary = useMemo(() => {
+    const counts = { delivered: 0, confirmed: 0, awaiting: 0, bounced: 0 };
+    for (const p of event.participants) {
+      const s = p.delivery;
+      if (!s || s.demo) continue;
+      if (s.status === "delivered") counts.delivered += 1;
+      else if (s.status === "confirmed") counts.confirmed += 1;
+      else if (s.status === "awaiting") counts.awaiting += 1;
+      else if (s.status === "bounced") counts.bounced += 1;
+    }
+    return counts;
+  }, [event.participants]);
+
+  const hasDeliveryData =
+    deliverySummary.delivered +
+      deliverySummary.confirmed +
+      deliverySummary.awaiting +
+      deliverySummary.bounced >
+    0;
 
   async function handleRetryFailed() {
     const failed = event.participants.filter((p) =>
@@ -301,6 +603,27 @@ export function EventWorkspace({
           >
             Schedule Campaign
           </button>
+          <button
+            type="button"
+            className={`btn btn--ghost sf-event-btn sf-event-btn--${sf.eventState(event).state}`}
+            disabled={sf.busy !== null}
+            onClick={() => void sf.syncEvent(event)}
+            title={
+              sf.eventState(event).state === "failed"
+                ? sf.eventState(event).record?.error
+                : "Create this event as a Salesforce Campaign and add its leads"
+            }
+          >
+            {sf.busy
+              ? sf.busy
+              : sf.eventState(event).state === "synced"
+                ? "✓ In Salesforce"
+                : sf.eventState(event).state === "stale"
+                  ? "Re-sync to Salesforce"
+                  : sf.eventState(event).state === "failed"
+                    ? "Retry Salesforce sync"
+                    : "Sync to Salesforce"}
+          </button>
         </div>
       </div>
 
@@ -325,9 +648,31 @@ export function EventWorkspace({
           <p className="send-bar__meta">
             {selectedIds.size} selected
             {!outlookConnected ? " · Outlook not connected" : ""}
+            {hasDeliveryData ? (
+              <span className="delivery-summary">
+                {deliverySummary.delivered + deliverySummary.confirmed > 0
+                  ? ` · ✓ ${deliverySummary.delivered + deliverySummary.confirmed} delivered`
+                  : ""}
+                {deliverySummary.awaiting > 0
+                  ? ` · ⏳ ${deliverySummary.awaiting} checking`
+                  : ""}
+                {deliverySummary.bounced > 0
+                  ? ` · ✗ ${deliverySummary.bounced} bounced`
+                  : ""}
+              </span>
+            ) : null}
           </p>
         </div>
         <div className="send-bar__actions">
+          <button
+            type="button"
+            className="btn btn--ghost"
+            disabled={checking}
+            onClick={() => void checkDelivery(false)}
+            title="Look in Sent Items and bounce notices to verify delivery"
+          >
+            {checking ? "Checking…" : "Check delivery"}
+          </button>
           <button
             type="button"
             className="btn btn--ghost"
@@ -430,9 +775,9 @@ export function EventWorkspace({
               updateParticipant(id, { template: templateName })
             }
             onPageChange={setPage}
-            onAddParticipant={() =>
-              onToast("Add Participant — coming in a later phase.")
-            }
+            onAddParticipant={() => setAddOpen(true)}
+            onConfirmReceived={handleConfirmReceived}
+            onRemove={handleRemoveParticipant}
           />
         </>
       )}
@@ -466,6 +811,20 @@ export function EventWorkspace({
           </p>
         </div>
       )}
+
+      {addOpen ? (
+        <AddParticipantPanel
+          eventName={event.name}
+          existing={event.participants}
+          industries={industries}
+          outlookConnected={outlookConnected}
+          outlookMode={outlookMode}
+          mailbox={outlookMailbox}
+          onClose={() => setAddOpen(false)}
+          onAdd={handleAddParticipant}
+          onConnectOutlook={onConnectOutlook}
+        />
+      ) : null}
 
       <ScheduleCampaignModal
         open={scheduleOpen}

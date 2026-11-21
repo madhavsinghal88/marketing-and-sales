@@ -1,0 +1,204 @@
+.sidebar {
+  background: linear-gradient(180deg, var(--navy) 0%, #081628 100%);
+  color: #d7e2f0;
+  display: flex;
+  flex-direction: column;
+  padding: 1.15rem 0.85rem 1rem;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow: hidden;
+  transition: padding 180ms ease;
+}
+
+.sidebar.is-collapsed {
+  padding: 1rem 0.55rem;
+  align-items: center;
+}
+
+.sidebar__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
+  margin-bottom: 0.85rem;
+  width: 100%;
+}
+
+.sidebar.is-collapsed .sidebar__top {
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.sidebar__brand {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.15rem 0.35rem;
+  color: #fff;
+  font-weight: 700;
+  font-size: 1.15rem;
+  letter-spacing: -0.02em;
+  min-width: 0;
+}
+
+.sidebar__collapse {
+  width: 1.85rem;
+  height: 1.85rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: #d7e2f0;
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
+.sidebar__collapse:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.sidebar__logo {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  background: var(--blue);
+  font-size: 0.95rem;
+  flex-shrink: 0;
+}
+
+.sidebar__brand-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.15;
+}
+
+.sidebar__name {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: -0.02em;
+}
+
+.sidebar__tagline {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(183, 198, 217, 0.85);
+}
+
+.sidebar__nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 0.15rem;
+}
+
+.sidebar__link {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: #b7c6d9;
+  text-align: left;
+  padding: 0.65rem 0.75rem;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 0.92rem;
+  font-weight: 500;
+}
+
+.sidebar.is-collapsed .sidebar__link {
+  justify-content: center;
+  padding: 0.7rem 0.4rem;
+}
+
+.sidebar__link:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+}
+
+.sidebar__link.is-active {
+  background: rgba(30, 111, 255, 0.22);
+  color: #fff;
+}
+
+.sidebar__icon {
+  width: 1.1rem;
+  text-align: center;
+  opacity: 0.9;
+  flex-shrink: 0;
+}
+
+.sidebar__label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar__footer {
+  margin-top: auto;
+  padding-top: 0.75rem;
+  width: 100%;
+}
+
+.sidebar.is-collapsed .sidebar__nav {
+  width: 100%;
+  align-items: stretch;
+}
+
+.sidebar__outlook {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  padding: 0.75rem;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.sidebar.is-collapsed .sidebar__outlook {
+  justify-content: center;
+  padding: 0.7rem 0.45rem;
+}
+
+.sidebar__outlook-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 999px;
+  margin-top: 0.35rem;
+  background: var(--green);
+  box-shadow: 0 0 0 3px rgba(31, 157, 99, 0.25);
+  flex-shrink: 0;
+}
+
+.sidebar__outlook.is-off .sidebar__outlook-dot {
+  background: #8b97a8;
+  box-shadow: none;
+}
+
+.sidebar__outlook-title {
+  margin: 0;
+  color: #fff;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.sidebar__outlook-mail {
+  margin: 0.15rem 0 0;
+  font-size: 0.72rem;
+  color: #93a6bd;
+  word-break: break-all;
+}
+

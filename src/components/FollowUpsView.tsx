@@ -1,11 +1,15 @@
 import type { FollowUpTask, SalesActivity, SalesOwner } from "@/lib/types";
 import { SALES_OWNERS } from "@/lib/types";
+import type { SalesforceSyncApi } from "@/lib/salesforce/useSync";
+import { SyncCell } from "./SalesforceSync";
+import { PullButton } from "./SalesforceTwoWay";
 
 type Props = {
   tasks: FollowUpTask[];
   activities: SalesActivity[];
   onToggleDone: (taskId: string) => void;
   onReassign: (taskId: string, owner: SalesOwner) => void;
+  sf: SalesforceSyncApi;
 };
 
 export function FollowUpsView({
@@ -13,6 +17,7 @@ export function FollowUpsView({
   activities,
   onToggleDone,
   onReassign,
+  sf,
 }: Props) {
   const openCount = tasks.filter((t) => t.status !== "Done").length;
   const overdueCount = tasks.filter((t) => t.status === "Overdue").length;
@@ -27,6 +32,18 @@ export function FollowUpsView({
             Assign leads to teammates, track reminders, and review call/email
             history.
           </p>
+        </div>
+        <div className="view-panel__buttons">
+          <PullButton sf={sf} />
+          <button
+            type="button"
+            className="btn btn--ghost"
+            disabled={sf.busy !== null || tasks.length + activities.length === 0}
+            onClick={() => void sf.syncFollowUps()}
+            title="Create or update these follow-ups and activities as Salesforce Tasks"
+          >
+            {sf.busy ?? `Sync ${tasks.length + activities.length} tasks to Salesforce`}
+          </button>
         </div>
       </div>
 
@@ -59,6 +76,7 @@ export function FollowUpsView({
                 <th>Channel</th>
                 <th>Owner</th>
                 <th>Status</th>
+                <th>Salesforce</th>
                 <th />
               </tr>
             </thead>
@@ -102,6 +120,14 @@ export function FollowUpsView({
                     >
                       {task.status}
                     </span>
+                  </td>
+                  <td>
+                    <SyncCell
+                      view={sf.taskState(task)}
+                      sf={sf}
+                      onSync={() => void sf.syncFollowUps()}
+                      conflict={sf.conflictFor("task", task.id)}
+                    />
                   </td>
                   <td>
                     <button

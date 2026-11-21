@@ -7,6 +7,13 @@ export const OUTLOOK_SCOPES = [
   "Mail.Send",
 ].join(" ");
 
+/**
+ * Delivery tracking is opt-in: reading Sent Items / bounces needs Mail.Read, and some
+ * company tenants require admin approval for it. Normal sending keeps working
+ * with Mail.Send only.
+ */
+export const OUTLOOK_TRACKING_SCOPES = `${OUTLOOK_SCOPES} Mail.Read`;
+
 export function getOutlookConfig() {
   const clientId = process.env.MICROSOFT_CLIENT_ID?.trim() ?? "";
   const clientSecret = process.env.MICROSOFT_CLIENT_SECRET?.trim() ?? "";
@@ -22,6 +29,9 @@ export function getOutlookConfig() {
     tenant,
     redirectUri,
     configured,
+    graphBase:
+      process.env.MICROSOFT_GRAPH_BASE_URL?.trim().replace(/\/+$/, "") ||
+      "https://graph.microsoft.com/v1.0",
     authorizeUrl: `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/authorize`,
     tokenUrl: `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`,
   };

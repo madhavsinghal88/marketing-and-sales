@@ -1,0 +1,112 @@
+
+/* ——— Sidebar v4 "light": white surface, soft borders, blue accent (matches cards and top bar) ——— */
+
+.sidebar {
+  background: linear-gradient(180deg, #ffffff 0%, #f6f8fc 100%);
+  color: var(--ink-soft);
+  border-right: 1px solid var(--line);
+  box-shadow: 8px 0 28px rgba(15, 35, 65, 0.04);
+}
+
+.sidebar__top {
+  border-bottom: 1px solid var(--line);
+}
+
+.sidebar__brand,
+.sidebar__name {
+  color: var(--navy);
+}
+
+.sidebar__tagline {
+  color: var(--muted);
+}
+
+.sidebar__logo {
+  color: #fff;
+  box-shadow: 0 6px 14px rgba(30, 111, 255, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+.sidebar__collapse {
+  background: #fff;
+  border: 1px solid var(--line-strong);
+  color: var(--ink-soft);
+}
+
+.sidebar__collapse:hover {
+  background: var(--blue-soft);
+  border-color: rgba(30, 111, 255, 0.35);
+  color: var(--blue-deep);
+}
+
+.sidebar__nav {
+  scrollbar-color: rgba(15, 35, 65, 0.18) transparent;
+}
+
+.sidebar__nav::-webkit-scrollbar-thumb {
+  background: rgba(15, 35, 65, 0.16);
+}
+
+.sidebar__section-label {
+  color: var(--muted);
+}
+
+.sidebar__section + .sidebar__section {
+  border-top-color: var(--line);
+}
+
+.sidebar__link {
+  color: var(--ink-soft);
+}
+
+.sidebar__link:hover,
+.sidebar.is-collapsed .sidebar__link:hover {
+  background: #eef3fb;
+  color: var(--ink);
+}
+
+.sidebar__icon {
+  color: #6d7d92;
+  background: var(--gray-soft);
+}
+
+.sidebar__link:hover .sidebar__icon {
+  background: #e1e8f3;
+  color: var(--blue-deep);
+}
+
+/* Active page: pale blue row, filled blue icon tile */
+.sidebar__link.is-active {
+  background: var(--blue-soft);
+  box-shadow: inset 0 0 0 1px rgba(30, 111, 255, 0.2);
+  color: var(--blue-deep);
+  font-weight: 650;
+}
+
+.sidebar__link.is-active .sidebar__icon {
+  background: var(--blue);
+  color: #fff;
+  box-shadow: 0 4px 10px rgba(30, 111, 255, 0.32);
+}
+
+.sidebar__footer {
+  border-top: 1px solid var(--line);
+}
+
+.sidebar__outlook {
+  background: #fff;
+  border: 1px solid var(--line);
+  box-shadow: 0 2px 8px rgba(15, 35, 65, 0.05);
+}
+
+.sidebar__outlook:hover {
+  background: #fff;
+  border-color: var(--line-strong);
+}
+
+.sidebar__outlook-title {
+  color: var(--ink);
+}
+
+.sidebar__outlook-mail {
+  color: var(--muted);
+}

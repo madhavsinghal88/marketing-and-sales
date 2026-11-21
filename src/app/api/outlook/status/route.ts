@@ -11,6 +11,7 @@ export async function GET() {
     mode: session?.mode ?? null,
     mailbox: session?.mailbox ?? null,
     displayName: session?.displayName ?? null,
+    canRead: Boolean(session?.canRead),
     oauthConfigured: config.configured,
   });
 }

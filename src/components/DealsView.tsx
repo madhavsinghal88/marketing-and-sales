@@ -1,12 +1,16 @@
 import type { Deal } from "@/lib/types";
 import { formatMoney } from "@/lib/sales";
+import type { SalesforceSyncApi } from "@/lib/salesforce/useSync";
+import { SyncCell } from "./SalesforceSync";
+import { PullButton } from "./SalesforceTwoWay";
 
 type Props = {
   deals: Deal[];
   onToast: (message: string) => void;
+  sf: SalesforceSyncApi;
 };
 
-export function DealsView({ deals, onToast }: Props) {
+export function DealsView({ deals, onToast, sf }: Props) {
   const openDeals = deals.filter(
     (d) => d.stage !== "Won" && d.stage !== "Lost",
   );
@@ -26,15 +30,27 @@ export function DealsView({ deals, onToast }: Props) {
             closed outcomes.
           </p>
         </div>
-        <button
-          type="button"
-          className="btn btn--primary"
-          onClick={() =>
-            onToast("New deal form expands with CRM persistence later.")
-          }
-        >
-          + New deal
-        </button>
+        <div className="view-panel__buttons">
+          <PullButton sf={sf} />
+          <button
+            type="button"
+            className="btn btn--ghost"
+            disabled={sf.busy !== null || deals.length === 0}
+            onClick={() => void sf.syncDeals(deals)}
+            title="Create or update these deals as Salesforce Opportunities"
+          >
+            {sf.busy ?? `Sync ${deals.length} to Salesforce`}
+          </button>
+          <button
+            type="button"
+            className="btn btn--primary"
+            onClick={() =>
+              onToast("New deal form expands with CRM persistence later.")
+            }
+          >
+            + New deal
+          </button>
+        </div>
       </div>
 
       <div className="sales-summary">
@@ -68,6 +84,7 @@ export function DealsView({ deals, onToast }: Props) {
               <th>Expected</th>
               <th>Close</th>
               <th>Owner</th>
+              <th>Salesforce</th>
             </tr>
           </thead>
           <tbody>
@@ -86,11 +103,19 @@ export function DealsView({ deals, onToast }: Props) {
                 <td>{formatMoney(deal.expectedRevenue)}</td>
                 <td>{deal.closeLabel}</td>
                 <td>{deal.owner}</td>
+                <td>
+                  <SyncCell
+                    view={sf.dealState(deal)}
+                    sf={sf}
+                    onSync={() => void sf.syncDeals([deal])}
+                    conflict={sf.conflictFor("lead", deal.leadId)}
+                  />
+                </td>
               </tr>
             ))}
             {deals.length === 0 ? (
               <tr>
-                <td colSpan={8}>
+                <td colSpan={9}>
                   No deals yet — qualify leads in the pipeline to create
                   opportunities.
                 </td>
