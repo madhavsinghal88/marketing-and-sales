@@ -6,6 +6,10 @@ type Props = {
   connecting?: boolean;
   onConnect: () => void;
   onDisconnect: () => void;
+  salesforceConnected: boolean;
+  salesforceMode: "demo" | "live" | null;
+  salesforceUser: string | null;
+  onDisconnectSalesforce: () => void;
   userName: string;
 };
 
@@ -17,6 +21,10 @@ export function TopHeader({
   connecting,
   onConnect,
   onDisconnect,
+  salesforceConnected,
+  salesforceMode,
+  salesforceUser,
+  onDisconnectSalesforce,
   userName,
 }: Props) {
   const initials = userName
@@ -74,6 +82,25 @@ export function TopHeader({
                 : "Connect Outlook (demo)"}
           </button>
         )}
+
+        {salesforceConnected ? (
+          <button
+            type="button"
+            className="outlook-chip is-on"
+            onClick={onDisconnectSalesforce}
+            title={
+              salesforceUser
+                ? `${salesforceUser} — click to disconnect`
+                : "Click to disconnect"
+            }
+          >
+            <span className="outlook-chip__check" aria-hidden>
+              ✓
+            </span>
+            Salesforce Connected
+            {salesforceMode === "demo" ? " (demo)" : ""}
+          </button>
+        ) : null}
 
         <button type="button" className="icon-btn" aria-label="Notifications">
           🔔

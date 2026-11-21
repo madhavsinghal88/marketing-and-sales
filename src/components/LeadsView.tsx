@@ -8,14 +8,18 @@ import type {
 } from "@/lib/types";
 import { SALES_OWNERS } from "@/lib/types";
 import { pipelineSummary } from "@/lib/sales";
+import type { SalesforceSyncApi } from "@/lib/salesforce/useSync";
+import { SyncCell } from "./SalesforceSync";
+import { PullButton } from "./SalesforceTwoWay";
 
 type Props = {
   leads: SalesLead[];
   onAssignOwner: (leadId: string, owner: SalesOwner) => void;
   onOpenPipeline: () => void;
+  sf: SalesforceSyncApi;
 };
 
-export function LeadsView({ leads, onAssignOwner, onOpenPipeline }: Props) {
+export function LeadsView({ leads, onAssignOwner, onOpenPipeline, sf }: Props) {
   const [temp, setTemp] = useState<LeadTemperature | "">("");
   const [owner, setOwner] = useState<SalesOwner | "">("");
   const summary = pipelineSummary(leads);
@@ -38,9 +42,26 @@ export function LeadsView({ leads, onAssignOwner, onOpenPipeline }: Props) {
             interest. Hot / Warm / Cold tags help prioritize outreach.
           </p>
         </div>
-        <button type="button" className="btn btn--primary" onClick={onOpenPipeline}>
-          Open pipeline
-        </button>
+        <div className="view-panel__buttons">
+          <PullButton sf={sf} />
+          <button
+            type="button"
+            className="btn btn--ghost"
+            disabled={sf.busy !== null || filtered.length === 0}
+            onClick={() =>
+              void sf.syncLeads(
+                filtered,
+                temp || owner ? "current filter" : "all leads",
+              )
+            }
+            title="Create or update these leads in Salesforce"
+          >
+            {sf.busy ?? `Sync ${filtered.length} to Salesforce`}
+          </button>
+          <button type="button" className="btn btn--primary" onClick={onOpenPipeline}>
+            Open pipeline
+          </button>
+        </div>
       </div>
 
       <div className="sales-summary">
@@ -109,6 +130,7 @@ export function LeadsView({ leads, onAssignOwner, onOpenPipeline }: Props) {
               <th>Stage</th>
               <th>Owner</th>
               <th>Last activity</th>
+              <th>Salesforce</th>
             </tr>
           </thead>
           <tbody>
@@ -155,6 +177,14 @@ export function LeadsView({ leads, onAssignOwner, onOpenPipeline }: Props) {
                   </select>
                 </td>
                 <td>{lead.lastActivity}</td>
+                <td>
+                  <SyncCell
+                    view={sf.leadState(lead)}
+                    sf={sf}
+                    onSync={() => void sf.syncLeads([lead])}
+                    conflict={sf.conflictFor("lead", lead.id)}
+                  />
+                </td>
               </tr>
             ))}
           </tbody>

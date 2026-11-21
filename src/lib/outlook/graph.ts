@@ -29,7 +29,9 @@ async function refreshAccessToken(
     client_secret: config.clientSecret,
     grant_type: "refresh_token",
     refresh_token: session.refreshToken,
-    scope: "offline_access User.Read Mail.Send",
+    scope: session.canRead
+      ? "offline_access User.Read Mail.Send Mail.Read"
+      : "offline_access User.Read Mail.Send",
   });
 
   const res = await fetch(config.tokenUrl, {
@@ -88,7 +90,7 @@ export async function sendGraphMail(
     return { ok: false, error: "Missing Outlook access token" };
   }
 
-  const res = await fetch("https://graph.microsoft.com/v1.0/me/sendMail", {
+  const res = await fetch(`${getOutlookConfig().graphBase}/me/sendMail`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${session.accessToken}`,

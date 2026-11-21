@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { createHmac, randomUUID, timingSafeEqual } from "crypto";
+import { createSessionStore, type SessionStore } from "../secureStore";
 
 export const OUTLOOK_COOKIE = "eventmail_outlook";
 
@@ -10,6 +11,8 @@ export type OutlookSession = {
   refreshToken?: string;
   expiresAt?: number; // epoch ms
   displayName?: string;
+  /** True when the user granted Mail.Read (needed for delivery checks). */
+  canRead?: boolean;
 };
 
 function getSecret() {
@@ -24,13 +27,16 @@ function sign(payload: string): string {
   return createHmac("sha256", getSecret()).update(payload).digest("base64url");
 }
 
-// Tokens are too large for a cookie (browsers drop cookies > ~4KB), so they live in
-// server memory. The cookie only carries a signed session id. Dev/test setup: sessions
-// are lost when the server restarts (just click Connect Outlook again).
+// Tokens are too large for a cookie (browsers drop cookies > ~4KB), so the cookie only
+// carries a signed session id and the tokens live server-side in an encrypted store that
+// survives server restarts.
 const globalStore = globalThis as unknown as {
-  __outlookSessions?: Map<string, OutlookSession>;
+  __outlookSessionStore?: SessionStore<OutlookSession>;
 };
-const store = (globalStore.__outlookSessions ??= new Map<string, OutlookSession>());
+const store = (globalStore.__outlookSessionStore ??= createSessionStore<OutlookSession>({
+  name: "outlook",
+  secret: getSecret(),
+}));
 
 function readSessionId(raw: string | undefined): string | null {
   if (!raw) return null;

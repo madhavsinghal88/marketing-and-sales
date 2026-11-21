@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { applyMergeFields } from "@/lib/template";
+import { isValidEmail } from "@/lib/participants";
 import { getValidSession, sendGraphMail } from "@/lib/outlook/graph";
 import type { SequenceDay } from "@/lib/types";
 
@@ -45,8 +46,27 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  if (body.recipients.length > 200) {
+    return NextResponse.json(
+      { error: "Send to at most 200 recipients per request" },
+      { status: 400 },
+    );
+  }
+
   const results = [];
   for (const person of body.recipients) {
+    if (!person?.email || !isValidEmail(person.email)) {
+      results.push({
+        id: person?.id ?? "",
+        email: person?.email ?? "",
+        day: body.day,
+        ok: false,
+        error: "Invalid recipient email address",
+        demo: false,
+      });
+      continue;
+    }
+
     const subject = applyMergeFields(body.template.subject, {
       name: person.name,
       email: person.email,
@@ -58,6 +78,7 @@ export async function POST(req: NextRequest) {
       event: body.eventName,
     });
 
+    const sentAt = new Date().toISOString();
     const sent = await sendGraphMail(session, {
       toEmail: person.email,
       toName: person.name,
@@ -73,6 +94,8 @@ export async function POST(req: NextRequest) {
       messageId: sent.messageId,
       error: sent.error,
       demo: sent.demo ?? false,
+      subject, // lets the client match this mail in Sent Items later
+      sentAt,
     });
   }
 

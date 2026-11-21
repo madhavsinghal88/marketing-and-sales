@@ -18,6 +18,9 @@ Evolve the current Event Email Automation dashboard into a **Marketing & Sales A
 | Scheduled drip | ✅ Phase 1 |
 | Marketing analytics / segments / automation | ✅ Phase 2 |
 | Lead scoring / pipeline / follow-ups / deals | ✅ Phase 3 |
+| Salesforce connect (OAuth + demo mode) | ✅ Integration Phase 1 |
+| Salesforce push sync (leads, deals, tasks, campaigns) | ✅ Integration Phase 2 |
+| Salesforce two-way sync + hardening | ✅ Integration Phase 3 (see SALESFORCE_DEMO.md) |
 | Persistence + polish | ⬜ Later |
 
 ---
@@ -188,6 +191,26 @@ SYSTEM
 | Calendly | Meeting scheduling |
 | Microsoft Teams | Meeting and team communication |
 | Heroku | Cloud app deploy and hosting |
+
+### Salesforce sync (EventMail → Salesforce)
+
+| EventMail | Salesforce | Matching (no duplicates) |
+|-----------|------------|--------------------------|
+| Lead | Lead | email |
+| Deal | Opportunity (+ Account for the company) | opportunity name |
+| Follow-up / logged activity | Task on the Lead | lead + subject |
+| Event | Campaign + Campaign Members | campaign name |
+
+- Re-syncing **updates**; it never duplicates. A rep's own edits are respected: a lead's status only moves while it is still "Open - Not Contacted", title/company are only filled when blank, closed opportunities and converted leads are left alone.
+- Rows show **Not synced / ✓ Synced / ↻ Changed / ! Failed**; changed data is detected automatically and offers **Re-sync**.
+- Works with no Salesforce setup (score/event go into Description + Rating). Optional custom fields `EventMail_Score__c`, `EventMail_Event__c`, `EventMail_Last_Activity__c` are auto-detected on Lead.
+- Campaigns need the **Marketing User** checkbox on the connected Salesforce user.
+- Demo mode simulates everything and sends nothing.
+- **Two-way (Integration Phase 3):** **Pull from Salesforce** brings back lead status / opportunity stage → stage, owner, and task completion. Conflicts follow a policy (Salesforce wins / EventMail wins / Ask me). A push never overwrites a field a rep changed in Salesforce.
+- **Owner mapping:** EventMail owners are linked to Salesforce users (auto-match by name); records are assigned accordingly.
+- **Hardening:** encrypted session store in `.data/` (survives restarts), retries with backoff for rate limits/locks/timeouts, dead-session detection, retry-failed, exportable log, read-only org health check.
+- Lead/follow-up edits are now saved in localStorage so pulled changes survive a refresh.
+- Not covered: Salesforce push notifications (pull is manual or on a timer), pulling brand-new Salesforce leads, multi-server token storage (the store has a single-file backend; swap for Redis/Postgres).
 
 ---
 

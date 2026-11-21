@@ -23,6 +23,10 @@ import type {
 } from "@/lib/types";
 import { loadTemplate, saveTemplate } from "@/lib/template";
 import { runDueDripJobs } from "@/lib/drip/runner";
+import {
+  mergeStoredParticipants,
+  saveManualParticipants,
+} from "@/lib/participants";
 import { computeCampaignMetrics, flattenParticipants } from "@/lib/analytics";
 import {
   assignLeadOwner,
@@ -31,7 +35,25 @@ import {
   buildFollowUps,
   buildLeadsFromEvents,
   moveLeadStage,
+  reconcileManualLeads,
 } from "@/lib/sales";
+import { useSalesforceSync } from "@/lib/salesforce/useSync";
+import {
+  applyFollowUpPatches,
+  applyLeadPatches,
+  type FollowUpPatch,
+  type LeadPatch,
+} from "@/lib/salesforce/reconcile";
+import {
+  applyFollowUpOverrides,
+  applyLeadOverrides,
+  diffFollowUps,
+  diffLeads,
+  loadFollowUpOverrides,
+  loadLeadOverrides,
+  saveFollowUpOverrides,
+  saveLeadOverrides,
+} from "@/lib/overrides";
 import { AppSidebar } from "./AppSidebar";
 import { AnalyticsView } from "./AnalyticsView";
 import { AutomationTimeline } from "./AutomationTimeline";
@@ -125,7 +147,23 @@ type OutlookStatus = {
   mailbox: string | null;
   displayName: string | null;
   oauthConfigured: boolean;
+  canRead?: boolean;
 };
+
+type SalesforceStatus = {
+  connected: boolean;
+  mode: "demo" | "live" | null;
+  username: string | null;
+  displayName: string | null;
+  instanceUrl: string | null;
+  /** The Salesforce user EventMail is connected as. */
+  userId?: string | null;
+  oauthConfigured: boolean;
+};
+
+/** The lists as they are built from sample data: edits are stored as a diff against these. */
+const BASE_LEADS = buildLeadsFromEvents(MOCK_EVENTS);
+const BASE_FOLLOW_UPS = buildFollowUps(BASE_LEADS);
 
 export function DashboardApp() {
   const [events, setEvents] = useState<EventItem[]>(MOCK_EVENTS);
@@ -159,6 +197,18 @@ export function DashboardApp() {
     oauthConfigured: false,
   });
   const [connecting, setConnecting] = useState(false);
+  const [salesforce, setSalesforce] = useState<SalesforceStatus>({
+    connected: false,
+    mode: null,
+    username: null,
+    displayName: null,
+    instanceUrl: null,
+    oauthConfigured: false,
+  });
+  const [sfConnecting, setSfConnecting] = useState(false);
+  // Saved lead/follow-up edits are loaded once; saving waits for that so an early save
+  // can't overwrite them with the untouched sample data.
+  const [editsLoaded, setEditsLoaded] = useState(false);
   const dripRunning = useRef(false);
   const eventsRef = useRef(events);
   const templateRef = useRef(template);
@@ -178,6 +228,16 @@ export function DashboardApp() {
     }
   }, []);
 
+  const refreshSalesforce = useCallback(async () => {
+    try {
+      const res = await fetch("/api/salesforce/status");
+      const data = (await res.json()) as SalesforceStatus;
+      setSalesforce(data);
+    } catch {
+      // ignore
+    }
+  }, []);
+
   function showToast(message: string) {
     setToast(message);
     window.setTimeout(() => setToast(null), 3200);
@@ -187,11 +247,49 @@ export function DashboardApp() {
     setTemplate(loadTemplate());
     setTemplateReady(true);
     void refreshOutlook();
+    void refreshSalesforce();
 
     const params = new URLSearchParams(window.location.search);
+    const salesforceFlag = params.get("salesforce");
+    if (salesforceFlag === "connected") {
+      showToast("Salesforce connected.");
+      setActiveView("integrations");
+      window.history.replaceState({}, "", "/");
+    } else if (salesforceFlag === "error") {
+      showToast(
+        `Salesforce connect failed: ${params.get("reason") ?? "unknown error"}`,
+      );
+      setActiveView("integrations");
+      window.history.replaceState({}, "", "/");
+    }
+
+    // Bring back participants the user added in earlier sessions.
+    const merged = mergeStoredParticipants(MOCK_EVENTS);
+    if (merged) {
+      setEvents(merged);
+    }
+    // People added in earlier sessions also need their lead; stage / owner edits made
+    // earlier (by a user or pulled from Salesforce) are put back on top.
+    const leadEdits = loadLeadOverrides();
+    setLeads((prev) =>
+      applyLeadOverrides(
+        merged ? merged.reduce((acc, e) => reconcileManualLeads(acc, e), prev) : prev,
+        leadEdits,
+      ),
+    );
+    setFollowUps((prev) => applyFollowUpOverrides(prev, loadFollowUpOverrides()));
+    setEditsLoaded(true);
+
     const outlookFlag = params.get("outlook");
     if (outlookFlag === "connected") {
-      showToast("Outlook connected.");
+      const tracking = params.get("tracking");
+      showToast(
+        tracking === "1"
+          ? "Outlook connected with delivery tracking."
+          : tracking === "denied"
+            ? "Outlook connected, but delivery tracking was not granted. A Microsoft admin may need to approve Mail.Read."
+            : "Outlook connected.",
+      );
       window.history.replaceState({}, "", "/");
     } else if (outlookFlag === "error") {
       showToast(
@@ -199,7 +297,15 @@ export function DashboardApp() {
       );
       window.history.replaceState({}, "", "/");
     }
-  }, [refreshOutlook]);
+  }, [refreshOutlook, refreshSalesforce]);
+
+  // Persist manually added participants (and their send/delivery state) locally.
+  // Skipped until something actually changed, so it can't overwrite saved data
+  // with the untouched mock list before the saved participants are merged in.
+  useEffect(() => {
+    if (events === MOCK_EVENTS) return;
+    saveManualParticipants(events);
+  }, [events]);
 
   useEffect(() => {
     async function tick() {
@@ -258,12 +364,71 @@ export function DashboardApp() {
 
   const deals = useMemo(() => buildDeals(leads), [leads]);
 
+  // Remember stage / owner / follow-up edits across page loads.
+  useEffect(() => {
+    if (!editsLoaded) return;
+    saveLeadOverrides(diffLeads(BASE_LEADS, leads));
+    saveFollowUpOverrides(diffFollowUps(BASE_FOLLOW_UPS, followUps));
+  }, [editsLoaded, leads, followUps]);
+
+  function applyPulledChanges(patches: {
+    leadPatches: LeadPatch[];
+    followUpPatches: FollowUpPatch[];
+  }) {
+    if (patches.leadPatches.length) {
+      setLeads((prev) => applyLeadPatches(prev, patches.leadPatches));
+    }
+    if (patches.followUpPatches.length) {
+      setFollowUps((prev) => applyFollowUpPatches(prev, patches.followUpPatches));
+    }
+  }
+
+  const sf = useSalesforceSync({
+    connected: salesforce.connected,
+    mode: salesforce.mode,
+    instanceUrl: salesforce.instanceUrl,
+    userId: salesforce.userId ?? null,
+    onApplyPull: applyPulledChanges,
+    onResetData: () => {
+      setLeads(events.reduce((acc, e) => reconcileManualLeads(acc, e), BASE_LEADS));
+      setFollowUps(BASE_FOLLOW_UPS);
+    },
+    leads,
+    deals,
+    followUps,
+    activities,
+    events,
+    onToast: showToast,
+    onAuthLost: () => void refreshSalesforce(),
+    onNeedConnect: () => {
+      showToast("Connect Salesforce first, then sync.");
+      setActiveView("integrations");
+    },
+  });
+
   function setParticipants(participants: Participant[]) {
     if (!selectedEvent) return;
+    // Added/removed people must also appear/disappear in the Leads list.
+    setLeads((prev) =>
+      reconcileManualLeads(prev, {
+        id: selectedEvent.id,
+        name: selectedEvent.name,
+        participants,
+      }),
+    );
     setEvents((prev) =>
       prev.map((e) =>
         e.id === selectedEvent.id
-          ? { ...e, participants, participantCount: participants.length }
+          ? {
+              ...e,
+              participants,
+              // The event's headline count covers more people than the loaded
+              // sample list, so move it by the change instead of overwriting it.
+              participantCount: Math.max(
+                0,
+                e.participantCount + participants.length - e.participants.length,
+              ),
+            }
           : e,
       ),
     );
@@ -355,6 +520,53 @@ export function DashboardApp() {
     showToast("Outlook disconnected.");
   }
 
+  async function handleConnectSalesforce() {
+    setSfConnecting(true);
+    try {
+      const statusRes = await fetch("/api/salesforce/status");
+      const status = (await statusRes.json()) as SalesforceStatus;
+      setSalesforce(status);
+
+      if (status.oauthConfigured) {
+        window.location.href = "/api/salesforce/connect";
+        return;
+      }
+
+      const demoRes = await fetch("/api/salesforce/demo", { method: "POST" });
+      if (!demoRes.ok) {
+        showToast("Could not start Salesforce demo connection.");
+        return;
+      }
+      await refreshSalesforce();
+      showToast(
+        "Salesforce connected in demo mode. Add Connected App credentials for a live org.",
+      );
+    } finally {
+      setSfConnecting(false);
+    }
+  }
+
+  async function handleConnectSalesforceDemo() {
+    setSfConnecting(true);
+    try {
+      const res = await fetch("/api/salesforce/demo", { method: "POST" });
+      if (!res.ok) {
+        showToast("Could not start Salesforce demo connection.");
+        return;
+      }
+      await refreshSalesforce();
+      showToast("Salesforce connected in demo mode. Nothing is sent to a real org.");
+    } finally {
+      setSfConnecting(false);
+    }
+  }
+
+  async function handleDisconnectSalesforce() {
+    await fetch("/api/salesforce/disconnect", { method: "POST" });
+    await refreshSalesforce();
+    showToast("Salesforce disconnected.");
+  }
+
   const showBoard = BOARD_VIEWS.includes(activeView);
   const placeholder =
     activeView in PLACEHOLDER_VIEWS
@@ -384,6 +596,10 @@ export function DashboardApp() {
           connecting={connecting}
           onConnect={handleConnectOutlook}
           onDisconnect={handleDisconnectOutlook}
+          salesforceConnected={salesforce.connected}
+          salesforceMode={salesforce.mode}
+          salesforceUser={salesforce.username}
+          onDisconnectSalesforce={handleDisconnectSalesforce}
           userName="Madhav Singhal"
         />
 
@@ -411,6 +627,10 @@ export function DashboardApp() {
                   event={selectedEvent}
                   template={template}
                   outlookConnected={outlook.connected}
+                  outlookMode={outlook.mode}
+                  outlookMailbox={outlook.mailbox}
+                  outlookCanRead={Boolean(outlook.canRead)}
+                  sf={sf}
                   scheduleRequestId={scheduleRequestId}
                   onParticipantsChange={setParticipants}
                   onToast={showToast}
@@ -495,6 +715,7 @@ export function DashboardApp() {
               leads={leads}
               onAssignOwner={handleAssignOwner}
               onOpenPipeline={() => setActiveView("pipeline")}
+              sf={sf}
             />
           )}
 
@@ -508,11 +729,12 @@ export function DashboardApp() {
               activities={activities}
               onToggleDone={handleToggleFollowUp}
               onReassign={handleReassignFollowUp}
+              sf={sf}
             />
           )}
 
           {activeView === "deals" && (
-            <DealsView deals={deals} onToast={showToast} />
+            <DealsView deals={deals} onToast={showToast} sf={sf} />
           )}
 
           {activeView === "sales-reports" && (
@@ -523,6 +745,22 @@ export function DashboardApp() {
             <IntegrationsView
               outlookConnected={outlook.connected}
               onConnectOutlook={handleConnectOutlook}
+              salesforce={salesforce}
+              salesforceConnecting={sfConnecting}
+              onConnectSalesforce={handleConnectSalesforce}
+              onConnectSalesforceDemo={handleConnectSalesforceDemo}
+              onDisconnectSalesforce={handleDisconnectSalesforce}
+              onToast={showToast}
+              sf={sf}
+              syncEntities={{ leads, deals, followUps }}
+              syncTotals={{
+                leads: leads.length,
+                deals: deals.length,
+                tasks: followUps.length + activities.length,
+                events: events.filter((e) =>
+                  leads.some((l) => l.eventId === e.id),
+                ).length,
+              }}
             />
           )}
 

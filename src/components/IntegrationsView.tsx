@@ -1,3 +1,10 @@
+"use client";
+
+import { useState } from "react";
+import type { SalesforceSyncApi } from "@/lib/salesforce/useSync";
+import type { Deal, FollowUpTask, SalesLead } from "@/lib/types";
+import { SalesforceSyncPanel } from "./SalesforceSync";
+
 type IntegrationId =
   | "outlook"
   | "hubspot"
@@ -29,7 +36,7 @@ const INTEGRATIONS: {
     id: "salesforce",
     name: "Salesforce",
     purpose: "Enterprise CRM",
-    status: "Planned",
+    status: "Available",
   },
   {
     id: "zoho",
@@ -156,15 +163,90 @@ function IntegrationLogo({ id }: { id: IntegrationId }) {
   }
 }
 
+type SalesforceState = {
+  connected: boolean;
+  mode: "demo" | "live" | null;
+  username: string | null;
+  displayName: string | null;
+  instanceUrl: string | null;
+  oauthConfigured: boolean;
+};
+
+type SalesforceLead = {
+  id: string;
+  name: string;
+  company: string;
+  email: string;
+  status: string;
+};
+
 type Props = {
   outlookConnected: boolean;
   onConnectOutlook: () => void;
+  salesforce: SalesforceState;
+  salesforceConnecting: boolean;
+  onConnectSalesforce: () => void;
+  /** Connect the simulated org even when real OAuth credentials exist (for demos). */
+  onConnectSalesforceDemo: () => void;
+  onDisconnectSalesforce: () => void;
+  onToast: (message: string) => void;
+  sf: SalesforceSyncApi;
+  syncTotals: { leads: number; deals: number; tasks: number; events: number };
+  syncEntities: { leads: SalesLead[]; deals: Deal[]; followUps: FollowUpTask[] };
 };
 
 export function IntegrationsView({
   outlookConnected,
   onConnectOutlook,
+  salesforce,
+  salesforceConnecting,
+  onConnectSalesforce,
+  onConnectSalesforceDemo,
+  onDisconnectSalesforce,
+  onToast,
+  sf,
+  syncTotals,
+  syncEntities,
 }: Props) {
+  const [leads, setLeads] = useState<SalesforceLead[] | null>(null);
+  const [leadsDemo, setLeadsDemo] = useState(false);
+  const [leadsLoading, setLeadsLoading] = useState(false);
+
+  async function handleLoadLeads() {
+    setLeadsLoading(true);
+    try {
+      const res = await fetch("/api/salesforce/leads");
+      const data = (await res.json()) as {
+        ok: boolean;
+        demo?: boolean;
+        leads?: SalesforceLead[];
+        error?: string;
+      };
+      if (!data.ok) {
+        setLeads(null);
+        onToast(data.error ?? "Could not load Salesforce leads.");
+        return;
+      }
+      setLeads(data.leads ?? []);
+      setLeadsDemo(Boolean(data.demo));
+    } catch {
+      onToast("Could not reach the Salesforce leads endpoint.");
+    } finally {
+      setLeadsLoading(false);
+    }
+  }
+
+  function handleDisconnect() {
+    setLeads(null);
+    onDisconnectSalesforce();
+  }
+
+  const sfLabel = salesforce.connected
+    ? `${salesforce.mode === "demo" ? "Demo org" : "Live org"} · ${salesforce.username ?? ""}`
+    : salesforce.oauthConfigured
+      ? "Not connected"
+      : "Not connected · demo mode available";
+
   return (
     <section className="view-panel" aria-label="Integrations">
       <div className="view-panel__head">
@@ -190,7 +272,8 @@ export function IntegrationsView({
               <span
                 className={`eng-pill ${item.status === "Available" ? "eng-pill--high" : "eng-pill--none"}`}
               >
-                {item.id === "outlook" && outlookConnected
+                {(item.id === "outlook" && outlookConnected) ||
+                (item.id === "salesforce" && salesforce.connected)
                   ? "Connected"
                   : item.status}
               </span>
@@ -204,12 +287,105 @@ export function IntegrationsView({
               >
                 {outlookConnected ? "Manage Outlook" : "Connect Outlook"}
               </button>
+            ) : item.id === "salesforce" ? (
+              <>
+                <p className="integration-card__meta">{sfLabel}</p>
+                {salesforce.connected ? (
+                  <div className="integration-card__actions">
+                    <button
+                      type="button"
+                      className="btn btn--ghost"
+                      onClick={handleLoadLeads}
+                      disabled={leadsLoading}
+                    >
+                      {leadsLoading
+                        ? "Loading…"
+                        : leads
+                          ? "Refresh leads"
+                          : "View leads"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--ghost"
+                      onClick={handleDisconnect}
+                    >
+                      Disconnect
+                    </button>
+                  </div>
+                ) : (
+                  <div className="integration-card__actions">
+                    <button
+                      type="button"
+                      className="btn btn--ghost"
+                      onClick={onConnectSalesforce}
+                      disabled={salesforceConnecting}
+                    >
+                      {salesforceConnecting
+                        ? "Connecting…"
+                        : salesforce.oauthConfigured
+                          ? "Connect Salesforce"
+                          : "Connect Salesforce (demo)"}
+                    </button>
+                    {salesforce.oauthConfigured ? (
+                      <button
+                        type="button"
+                        className="sf-link"
+                        onClick={onConnectSalesforceDemo}
+                        disabled={salesforceConnecting}
+                        title="Try everything with a simulated Salesforce, no login needed"
+                      >
+                        or try demo mode
+                      </button>
+                    ) : null}
+                  </div>
+                )}
+              </>
             ) : (
               <p className="integration-card__note">Coming in a later phase</p>
             )}
           </article>
         ))}
       </div>
+
+      {salesforce.connected ? (
+        <SalesforceSyncPanel sf={sf} totals={syncTotals} entities={syncEntities} />
+      ) : null}
+
+      {salesforce.connected && leads ? (
+        <div className="sf-preview">
+          <h3>
+            Recent Salesforce leads
+            {leads.length > 0 ? ` (${leads.length})` : ""}
+            {leadsDemo ? " · sample data, demo mode" : ""}
+          </h3>
+          {leads.length === 0 ? (
+            <p className="sf-preview__empty">
+              Connected, but this org has no leads yet.
+            </p>
+          ) : (
+            <table className="sf-preview__table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Company</th>
+                  <th>Email</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {leads.map((lead) => (
+                  <tr key={lead.id}>
+                    <td>{lead.name}</td>
+                    <td>{lead.company}</td>
+                    <td>{lead.email}</td>
+                    <td>{lead.status}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      ) : null}
     </section>
   );
 }

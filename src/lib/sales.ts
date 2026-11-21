@@ -78,6 +78,50 @@ export function buildLeadsFromEvents(events: EventItem[]): SalesLead[] {
   });
 }
 
+/**
+ * Keeps the Leads list in step with people added/removed through "+ Add Participant":
+ * a new manual participant becomes a "New" lead; a removed one loses their lead.
+ * Returns the same array when nothing changed.
+ */
+export function reconcileManualLeads(
+  leads: SalesLead[],
+  event: Pick<EventItem, "id" | "name" | "participants">,
+): SalesLead[] {
+  const present = new Set(event.participants.map((p) => p.id));
+  const kept = leads.filter(
+    (l) => l.eventId !== event.id || present.has(l.participantId),
+  );
+  const have = new Set(
+    kept.filter((l) => l.eventId === event.id).map((l) => l.participantId),
+  );
+
+  const fresh = event.participants
+    .filter((p) => p.source === "manual" && !have.has(p.id))
+    .flatMap((p) =>
+      buildLeadsFromEvents([
+        {
+          id: event.id,
+          name: event.name,
+          participantCount: 1,
+          status: "Active",
+          campaign: "",
+          sequenceLabel: "",
+          participants: [p],
+        },
+      ]),
+    )
+    // A brand-new person starts at the beginning of the pipeline, not wherever
+    // the score-based sample logic would put a 0-score contact.
+    .map((lead) => ({
+      ...lead,
+      stage: "New" as const,
+      lastActivity: "Added manually",
+    }));
+
+  if (fresh.length === 0 && kept.length === leads.length) return leads;
+  return [...fresh, ...kept];
+}
+
 export function buildFollowUps(leads: SalesLead[]): FollowUpTask[] {
   return leads
     .filter((lead) => lead.stage !== "Won" && lead.stage !== "Lost")

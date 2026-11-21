@@ -5,6 +5,7 @@ import type {
   SequenceDay,
 } from "@/lib/types";
 import { formatTouchTime } from "@/lib/outlook/sequence";
+import { initialDelivery } from "@/lib/outlook/delivery";
 import { upsertTouch } from "./schedule";
 import { getDuePendingJobs, updateDripJobs } from "./store";
 
@@ -13,6 +14,9 @@ type SendApiResult = {
   ok: boolean;
   messageId?: string;
   error?: string;
+  subject?: string;
+  sentAt?: string;
+  demo?: boolean;
 };
 
 type RunDueResult = {
@@ -145,6 +149,9 @@ export async function runDueDripJobs(options: {
           ok: r.ok,
           messageId: r.messageId,
           error: r.error,
+          subject: r.subject,
+          sentAt: r.sentAt,
+          demo: r.demo,
         })),
         nowLabel,
       );
@@ -203,6 +210,7 @@ function applyResults(
 
         return {
           ...person,
+          delivery: row.ok ? initialDelivery(row, day) : person.delivery,
           touches: upsertTouch(
             person.touches,
             day,

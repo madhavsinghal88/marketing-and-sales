@@ -53,6 +53,31 @@ export interface ParticipantEngagement {
   score: number;
 }
 
+/**
+ * What we can honestly say about a sent email:
+ * - awaiting:   accepted by Outlook, no bounce seen yet
+ * - delivered:  found in Sent Items and no bounce (NDR) came back
+ * - bounced:    Outlook/recipient server returned an "undeliverable" notice
+ * - confirmed:  a person confirmed they saw it in the recipient inbox
+ * - unverified: cannot be checked (demo mode / not found in Sent Items)
+ */
+export type DeliveryStatus =
+  | "awaiting"
+  | "delivered"
+  | "bounced"
+  | "confirmed"
+  | "unverified";
+
+export interface DeliveryInfo {
+  status: DeliveryStatus;
+  day: SequenceDay;
+  subject: string;
+  sentAt: string; // ISO
+  checkedAt?: string; // ISO
+  detail?: string;
+  demo?: boolean;
+}
+
 export interface Participant {
   id: string;
   name: string;
@@ -66,6 +91,11 @@ export interface Participant {
   touches: TouchLog[];
   template: string;
   comment: string;
+  /** "manual" = added by a user through Add Participant (persisted locally). */
+  source?: "manual";
+  addedAt?: string; // ISO
+  /** Result of the latest real send + delivery check. */
+  delivery?: DeliveryInfo;
 }
 
 export interface EventItem {

@@ -1,4 +1,9 @@
-import { SEQUENCE_DAYS, type Participant, type SequenceDay } from "@/lib/types";
+import {
+  SEQUENCE_DAYS,
+  type DeliveryStatus,
+  type Participant,
+  type SequenceDay,
+} from "@/lib/types";
 import { StatusBadge } from "./StatusBadge";
 
 type Props = {
@@ -14,7 +19,61 @@ type Props = {
   onTemplateChange: (id: string, template: string) => void;
   onPageChange: (page: number) => void;
   onAddParticipant: () => void;
+  onConfirmReceived: (id: string) => void;
+  onRemove: (id: string) => void;
 };
+
+const DELIVERY_LABEL: Record<DeliveryStatus, { icon: string; label: string }> = {
+  awaiting: { icon: "⏳", label: "Checking delivery" },
+  delivered: { icon: "✓", label: "Delivered" },
+  bounced: { icon: "✗", label: "Bounced" },
+  confirmed: { icon: "✓✓", label: "Received" },
+  unverified: { icon: "?", label: "Unverified" },
+};
+
+function DeliveryBadge({
+  participant,
+  onConfirm,
+}: {
+  participant: Participant;
+  onConfirm: (id: string) => void;
+}) {
+  const d = participant.delivery;
+  if (!d) return null;
+
+  const view = d.demo
+    ? { icon: "◌", label: "Demo send (not real)" }
+    : DELIVERY_LABEL[d.status];
+  const checked = d.checkedAt
+    ? ` · checked ${new Date(d.checkedAt).toLocaleTimeString("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+      })}`
+    : "";
+  const canConfirm =
+    !d.demo && d.status !== "confirmed" && d.status !== "bounced";
+
+  return (
+    <span className="delivery-row">
+      <span
+        className={`delivery-badge delivery-badge--${d.demo ? "demo" : d.status}`}
+        title={`${d.detail ?? view.label}${checked}`}
+      >
+        <span aria-hidden>{view.icon}</span> {view.label}
+      </span>
+      {canConfirm ? (
+        <button
+          type="button"
+          className="delivery-confirm"
+          onClick={() => onConfirm(participant.id)}
+          title="I can see this email in their inbox"
+        >
+          Confirm received
+        </button>
+      ) : null}
+    </span>
+  );
+}
 
 function initials(name: string) {
   return name
@@ -55,6 +114,8 @@ export function ParticipantsTable({
   onTemplateChange,
   onPageChange,
   onAddParticipant,
+  onConfirmReceived,
+  onRemove,
 }: Props) {
   const filtered = participants.filter((p) => {
     const q = query.trim().toLowerCase();
@@ -154,10 +215,28 @@ export function ParticipantsTable({
                     <span className="person-cell__copy">
                       <span className="person-cell__name">
                         {participant.name}
+                        {participant.source === "manual" ? (
+                          <>
+                            <span className="person-tag">Added</span>
+                            <button
+                              type="button"
+                              className="person-remove"
+                              aria-label={`Remove ${participant.name}`}
+                              title="Remove this participant"
+                              onClick={() => onRemove(participant.id)}
+                            >
+                              ✕
+                            </button>
+                          </>
+                        ) : null}
                       </span>
                       <span className="person-cell__email">
                         {participant.email}
                       </span>
+                      <DeliveryBadge
+                        participant={participant}
+                        onConfirm={onConfirmReceived}
+                      />
                     </span>
                   </div>
                 </td>
